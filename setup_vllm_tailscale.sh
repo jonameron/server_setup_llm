@@ -109,10 +109,13 @@ Type=simple
 User=root
 WorkingDirectory=/opt
 Environment="PATH=/opt/vllm-env/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-Environment="LD_LIBRARY_PATH=/usr/local/cuda/lib64"
+Environment="LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64"
 Environment="VLLM_LOGGING_LEVEL=DEBUG"
 Environment="CUDA_VISIBLE_DEVICES=0"
 Environment="NCCL_DEBUG=INFO"
+Environment="TORCH_DEVICE=cuda"
+Environment="HUGGINGFACE_TOKEN=${HF_TOKEN}"
+ExecStartPre=/bin/bash -c 'nvidia-smi || exit 1'
 ExecStart=/opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server \\
     --model ${MODEL_PATH} \\
     --host 0.0.0.0 \\
@@ -121,7 +124,10 @@ ExecStart=/opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server \\
     --trust-remote-code \\
     --dtype auto \\
     --tensor-parallel-size 1 \\
-    --gpu-memory-utilization 0.9
+    --gpu-memory-utilization 0.9 \\
+    --swap-space 16
+StandardOutput=append:/var/log/vllm.log
+StandardError=append:/var/log/vllm.log
 Restart=always
 RestartSec=10
 
@@ -129,11 +135,31 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
-# Reload systemd and start VLLM
+# Create log file
+touch /var/log/vllm.log
+chmod 644 /var/log/vllm.log
+
+# Add service check and debug info
+print_status "Checking NVIDIA and CUDA..."
+nvidia-smi
+print_status "CUDA version:"
+nvcc --version
+
 print_status "Starting VLLM service..."
 systemctl daemon-reload
-systemctl enable vllm
-systemctl start vllm
+systemctl restart vllm
+sleep 5
+
+# More detailed service check
+if ! systemctl is-active --quiet vllm; then
+    print_error "VLLM failed to start. Debugging information:"
+    systemctl status vllm
+    echo "Last 20 lines of logs:"
+    tail -n 20 /var/log/vllm.log
+    echo "GPU Status:"
+    nvidia-smi
+    exit 1
+fi
 
 # Wait for VLLM to start
 print_status "Waiting for VLLM to start..."
