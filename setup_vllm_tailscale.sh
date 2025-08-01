@@ -47,21 +47,37 @@ else
     print_status "Python already installed, skipping..."
 fi
 
-# Install NVIDIA drivers and CUDA
-print_status "Installing NVIDIA drivers and CUDA..."
-apt-get install -y nvidia-driver-535 nvidia-cuda-toolkit
-# Verify NVIDIA installation
-nvidia-smi || print_warning "NVIDIA drivers not loaded. You may need to reboot."
+# Install NVIDIA stack
+print_status "Installing NVIDIA stack..."
+# Add NVIDIA repository
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+    tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+apt-get update
+
+# Install drivers and toolkit
+apt-get install -y nvidia-driver-535 nvidia-dkms-535
+apt-get install -y nvidia-container-toolkit nvidia-cuda-toolkit build-essential
+
+# Verify NVIDIA installation and exit if not working
+if ! nvidia-smi &> /dev/null; then
+    print_error "NVIDIA drivers not loaded. You need to reboot first!"
+    print_warning "Please run: sudo reboot"
+    print_warning "Then run this script again after reboot"
+    exit 1
+fi
 
 # Create virtual environment for VLLM
 print_status "Creating Python virtual environment..."
 python3 -m venv /opt/vllm-env
 source /opt/vllm-env/bin/activate
 
-# Install VLLM
+# Install VLLM with specific CUDA version
 print_status "Installing VLLM..."
 pip install --upgrade pip
-pip install vllm
+pip install torch --index-url https://download.pytorch.org/whl/cu118
+pip install "vllm[all]"
 
 # Download Gamma3n model
 print_status "Downloading Gamma3n model..."
@@ -92,9 +108,11 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/opt
-Environment="PATH=/opt/vllm-env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PATH=/opt/vllm-env/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="LD_LIBRARY_PATH=/usr/local/cuda/lib64"
 Environment="VLLM_LOGGING_LEVEL=DEBUG"
 Environment="CUDA_VISIBLE_DEVICES=0"
+Environment="NCCL_DEBUG=INFO"
 ExecStart=/opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server \\
     --model ${MODEL_PATH} \\
     --host 0.0.0.0 \\
@@ -102,7 +120,8 @@ ExecStart=/opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server \\
     --max-model-len 4096 \\
     --trust-remote-code \\
     --dtype auto \\
-    --tensor-parallel-size 1
+    --tensor-parallel-size 1 \\
+    --gpu-memory-utilization 0.9
 Restart=always
 RestartSec=10
 
