@@ -83,18 +83,32 @@ pip install "vllm[all]"
 print_status "Downloading Gamma3n model..."
 # Note: Replace this with the actual model path/name
 # This is a placeholder as the exact model name might vary
-MODEL_PATH="google/gemma-3n-E4B-it"
+MODEL_PATH="google/gemma-3n-E4B"
 mkdir -p /opt/models
 
-# Install Hugging Face CLI and authenticate
+# Improve Hugging Face authentication
 print_status "Setting up Hugging Face authentication..."
 pip install --upgrade huggingface_hub
-if [ ! -f ~/.huggingface/token ]; then
+
+# Create config directory if it doesn't exist
+mkdir -p /root/.huggingface
+
+# Store token in proper location
+if [ ! -f /root/.huggingface/token ]; then
     print_warning "Please enter your Hugging Face token:"
     read -r HF_TOKEN
-    huggingface-cli login --token "$HF_TOKEN"
+    echo "${HF_TOKEN}" > /root/.huggingface/token
+    chmod 600 /root/.huggingface/token
 else
-    print_status "Hugging Face token already exists, skipping authentication..."
+    HF_TOKEN=$(cat /root/.huggingface/token)
+    print_status "Using existing Hugging Face token..."
+fi
+
+# Test token
+print_status "Testing Hugging Face authentication..."
+if ! huggingface-cli whoami; then
+    print_error "Hugging Face authentication failed. Please check your token."
+    exit 1
 fi
 
 # Create VLLM service
@@ -115,6 +129,9 @@ Environment="CUDA_VISIBLE_DEVICES=0"
 Environment="NCCL_DEBUG=INFO"
 Environment="TORCH_DEVICE=cuda"
 Environment="HUGGINGFACE_TOKEN=${HF_TOKEN}"
+Environment="TRANSFORMERS_CACHE=/opt/models/cache"
+Environment="HF_HOME=/root/.huggingface"
+Environment="HF_TOKEN=${HF_TOKEN}"
 ExecStartPre=/bin/bash -c 'nvidia-smi || exit 1'
 ExecStart=/opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server \\
     --model ${MODEL_PATH} \\
@@ -199,17 +216,17 @@ echo "To view Tailscale status:"
 echo "  tailscale status"
 echo "========================================="
 
-# Create a simple test script
+# Update test script with correct model name
 cat > /opt/test_vllm.py << 'EOF'
 #!/usr/bin/env python3
 import requests
 import json
 
-def test_gemma():
+def test_model():
     url = "http://localhost:8000/v1/chat/completions"
     headers = {"Content-Type": "application/json"}
     data = {
-        "model": "google/gemma-3n-E4B-it",
+        "model": "google/gemma-3n-E4B",
         "messages": [
             {
                 "role": "user",
@@ -229,7 +246,7 @@ def test_gemma():
         print("✗ Failed to connect to VLLM:", str(e))
 
 if __name__ == "__main__":
-    test_gemma()
+    test_model()
 EOF
 
 chmod +x /opt/test_vllm.py
