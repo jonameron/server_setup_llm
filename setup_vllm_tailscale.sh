@@ -67,27 +67,19 @@ pip install vllm
 print_status "Downloading Gamma3n model..."
 # Note: Replace this with the actual model path/name
 # This is a placeholder as the exact model name might vary
-MODEL_PATH="/opt/models/gamma3n"
+MODEL_PATH="google/gemma-3n-E4B-it"
 mkdir -p /opt/models
 
-# You'll need to replace this with the actual download command for Gamma3n
-# For example, if it's a Hugging Face model:
-# git clone https://huggingface.co/path/to/gamma3n $MODEL_PATH
-print_warning "Please update the model download command with the actual Gamma3n model path"
-
-# Install Tailscale
-print_status "Installing Tailscale..."
-curl -fsSL https://tailscale.com/install.sh | sh
-
-# Start Tailscale
-print_status "Starting Tailscale..."
-systemctl enable tailscaled
-systemctl start tailscaled
-
-# Authenticate Tailscale (interactive)
-print_status "Authenticating Tailscale..."
-print_warning "Please follow the authentication URL that will be displayed"
-tailscale up
+# Install Hugging Face CLI and authenticate
+print_status "Setting up Hugging Face authentication..."
+pip install --upgrade huggingface_hub
+if [ ! -f ~/.huggingface/token ]; then
+    print_warning "Please enter your Hugging Face token:"
+    read -r HF_TOKEN
+    huggingface-cli login --token "$HF_TOKEN"
+else
+    print_status "Hugging Face token already exists, skipping authentication..."
+fi
 
 # Create VLLM service
 print_status "Creating VLLM systemd service..."
@@ -108,6 +100,7 @@ ExecStart=/opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server \\
     --host 0.0.0.0 \\
     --port 8000 \\
     --max-model-len 4096 \\
+    --trust-remote-code \\
     --dtype auto \\
     --tensor-parallel-size 1
 Restart=always
@@ -167,16 +160,31 @@ cat > /opt/test_vllm.py << 'EOF'
 import requests
 import json
 
-# Test the local endpoint
-try:
-    response = requests.get("http://localhost:8000/v1/models")
-    if response.status_code == 200:
-        print("✓ VLLM is responding correctly")
-        print("Available models:", json.dumps(response.json(), indent=2))
-    else:
-        print("✗ VLLM returned status code:", response.status_code)
-except Exception as e:
-    print("✗ Failed to connect to VLLM:", str(e))
+def test_gemma():
+    url = "http://localhost:8000/v1/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    data = {
+        "model": "google/gemma-3n-E4B-it",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Say hello!"
+            }
+        ]
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        if response.status_code == 200:
+            print("✓ VLLM is responding correctly")
+            print("Response:", json.dumps(response.json(), indent=2))
+        else:
+            print("✗ VLLM returned status code:", response.status_code)
+    except Exception as e:
+        print("✗ Failed to connect to VLLM:", str(e))
+
+if __name__ == "__main__":
+    test_gemma()
 EOF
 
 chmod +x /opt/test_vllm.py
