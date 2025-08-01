@@ -31,13 +31,27 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-# System update
-print_status "Updating system packages..."
-apt-get update && apt-get upgrade -y
+# System update - only if hasn't been updated in last 24h
+if [[ $(find /var/cache/apt/pkgcache.bin -mtime +1) ]]; then
+    print_status "Updating system packages..."
+    apt-get update && apt-get upgrade -y
+else
+    print_status "System packages were recently updated, skipping..."
+fi
 
-# Install Python and dependencies
-print_status "Installing Python and essential packages..."
-apt-get install -y python3 python3-pip python3-venv git curl wget
+# Check Python installation
+if ! command -v python3 &> /dev/null; then
+    print_status "Installing Python and essential packages..."
+    apt-get install -y python3 python3-pip python3-venv git curl wget
+else
+    print_status "Python already installed, skipping..."
+fi
+
+# Install NVIDIA drivers and CUDA
+print_status "Installing NVIDIA drivers and CUDA..."
+apt-get install -y nvidia-driver-535 nvidia-cuda-toolkit
+# Verify NVIDIA installation
+nvidia-smi || print_warning "NVIDIA drivers not loaded. You may need to reboot."
 
 # Create virtual environment for VLLM
 print_status "Creating Python virtual environment..."
@@ -87,11 +101,15 @@ Type=simple
 User=root
 WorkingDirectory=/opt
 Environment="PATH=/opt/vllm-env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="VLLM_LOGGING_LEVEL=DEBUG"
+Environment="CUDA_VISIBLE_DEVICES=0"
 ExecStart=/opt/vllm-env/bin/python -m vllm.entrypoints.openai.api_server \\
     --model ${MODEL_PATH} \\
     --host 0.0.0.0 \\
     --port 8000 \\
-    --max-model-len 4096
+    --max-model-len 4096 \\
+    --dtype auto \\
+    --tensor-parallel-size 1
 Restart=always
 RestartSec=10
 
